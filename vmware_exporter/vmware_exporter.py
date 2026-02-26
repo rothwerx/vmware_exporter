@@ -684,6 +684,7 @@ class VmwareCollector():
             'summary.quickStats.overallMemoryUsage',
             'summary.hardware.cpuModel',
             'summary.hardware.model',
+            'config.network.vnic',
             'runtime.healthSystemRuntime.systemHealthInfo.numericSensorInfo',
             'runtime.healthSystemRuntime.hardwareStatusInfo.cpuStatusInfo',
             'runtime.healthSystemRuntime.hardwareStatusInfo.memoryStatusInfo',
@@ -1168,6 +1169,29 @@ class VmwareCollector():
                 snapshot.childSnapshotList)
         return snapshot_data
 
+    @staticmethod
+    def _host_vmk_devices(host):
+        vmk_devices = set()
+        for vnic in host.get('config.network.vnic', []) or []:
+            device = getattr(vnic, 'device', None)
+            if device:
+                vmk_devices.add(device)
+        return vmk_devices
+
+    @staticmethod
+    def _match_vmk_instance(instance, vmk_devices):
+        if not instance:
+            return None
+
+        if instance in vmk_devices:
+            return instance
+
+        normalized = re.split(r'[:/|]', instance, maxsplit=1)[0]
+        if normalized in vmk_devices:
+            return normalized
+
+        return None
+
     @defer.inlineCallbacks
     def updateMetricsLabelNames(self, metrics, metric_types):
         """
@@ -1438,6 +1462,15 @@ class VmwareCollector():
             'net.errorsTx.summation',
             'net.usage.average',
         ]
+        vmk_perf_list = [
+            'net.bytesRx.average',
+            'net.bytesTx.average',
+            'net.droppedRx.summation',
+            'net.droppedTx.summation',
+            'net.errorsRx.summation',
+            'net.errorsTx.summation',
+            'net.usage.average',
+        ]
 
         # Prepare gauges
         for p in perf_list:
@@ -1458,6 +1491,23 @@ class VmwareCollector():
                 instance=''
             ))
             metric_names[counter_key] = perf_metric_name
+
+        vmk_metrics = []
+        vmk_metric_names = {}
+        vmk_label_names = ['host_name', 'dc_name', 'cluster_name', 'vmk_device']
+        for perf_metric in vmk_perf_list:
+            perf_metric_name = 'vmware_host_vmk_' + perf_metric.replace('.', '_')
+            counter_key = counter_info[perf_metric]
+            vmk_metrics.append(vim.PerformanceManager.MetricId(
+                counterId=counter_key,
+                instance='*'
+            ))
+            vmk_metric_names[counter_key] = perf_metric_name
+            host_metrics[perf_metric_name] = GaugeMetricFamily(
+                perf_metric_name,
+                perf_metric_name,
+                labels=vmk_label_names
+            )
 
         # Insert custom attributes names as metric labels
         self.updateMetricsLabelNames(host_metrics, ['host_perf'])
@@ -1487,6 +1537,47 @@ class VmwareCollector():
                         labels[ent.entity._moId],
                         float(sum(metric.value)),
                     )
+
+            host_vmk_devices = {}
+            vmk_specs = []
+            for host_id, host in host_systems.items():
+                if host.get('runtime.powerState') != 'poweredOn':
+                    continue
+
+                vmk_devices = self._host_vmk_devices(host)
+                if not vmk_devices:
+                    continue
+
+                host_vmk_devices[host_id] = vmk_devices
+                vmk_specs.append(vim.PerformanceManager.QuerySpec(
+                    maxSample=1,
+                    entity=host['obj'],
+                    metricId=vmk_metrics,
+                    intervalId=20
+                ))
+
+            if vmk_specs:
+                vmk_results = yield threads.deferToThread(content.perfManager.QueryStats, querySpec=vmk_specs)
+                for ent in vmk_results:
+                    host_id = ent.entity._moId
+                    host_label_values = labels.get(host_id)
+                    vmk_devices = host_vmk_devices.get(host_id, set())
+                    if not host_label_values or not vmk_devices:
+                        continue
+
+                    for metric in ent.value:
+                        metric_name = vmk_metric_names.get(metric.id.counterId)
+                        if metric_name is None:
+                            continue
+
+                        vmk_instance = self._match_vmk_instance(metric.id.instance, vmk_devices)
+                        if vmk_instance is None:
+                            continue
+
+                        host_metrics[metric_name].add_metric(
+                            host_label_values[:3] + [vmk_instance],
+                            float(sum(metric.value)),
+                        )
 
         logging.info('FIN: _vmware_get_host_perf_manager_metrics')
 

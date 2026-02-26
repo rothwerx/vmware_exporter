@@ -1018,12 +1018,31 @@ def test_collect_host_perf():
     metric_4.id.counterId = 20
     metric_4.value = [10]
 
+    vmk_metric_1 = mock.Mock()
+    vmk_metric_1.id.counterId = 18
+    vmk_metric_1.id.instance = 'vmk0'
+    vmk_metric_1.value = [100]
+
+    vmk_metric_2 = mock.Mock()
+    vmk_metric_2.id.counterId = 19
+    vmk_metric_2.id.instance = 'vmk1'
+    vmk_metric_2.value = [200]
+
+    vmk_metric_3 = mock.Mock()
+    vmk_metric_3.id.counterId = 20
+    vmk_metric_3.id.instance = 'vmnic0'
+    vmk_metric_3.value = [300]
+
     ent_1 = mock.Mock()
     ent_1.value = [metric_1, metric_2, metric_3, metric_4]
     ent_1.entity = vim.ManagedObject('host:1')
 
+    ent_2 = mock.Mock()
+    ent_2.value = [vmk_metric_1, vmk_metric_2, vmk_metric_3]
+    ent_2.entity = vim.ManagedObject('host:1')
+
     content = mock.Mock()
-    content.perfManager.QueryStats.return_value = [ent_1]
+    content.perfManager.QueryStats.side_effect = [[ent_1], [ent_2]]
     collector.content = _succeed(content)
 
     collector.__dict__['counter_ids'] = _succeed({
@@ -1057,11 +1076,17 @@ def test_collect_host_perf():
         'host:1': ['host-1', 'dc', 'cluster-1'],
     })
 
+    vmk_0 = mock.Mock()
+    vmk_0.device = 'vmk0'
+    vmk_1 = mock.Mock()
+    vmk_1.device = 'vmk1'
+
     collector.__dict__['host_system_inventory'] = _succeed({
         'host:1': {
             'name': 'host-1',
             'obj': vim.ManagedObject('host-1'),
             'runtime.powerState': 'poweredOn',
+            'config.network.vnic': [vmk_0, vmk_1],
         },
     })
 
@@ -1095,6 +1120,26 @@ def test_collect_host_perf():
         'dc_name': 'dc',
     }
     assert metrics['vmware_host_net_droppedRx_summation'].samples[0][2] == 10.0
+
+    assert metrics['vmware_host_vmk_net_bytesRx_average'].samples[0][1] == {
+        'host_name': 'host-1',
+        'cluster_name': 'cluster-1',
+        'dc_name': 'dc',
+        'vmk_device': 'vmk0',
+    }
+    assert metrics['vmware_host_vmk_net_bytesRx_average'].samples[0][2] == 100.0
+
+    assert metrics['vmware_host_vmk_net_bytesTx_average'].samples[0][1] == {
+        'host_name': 'host-1',
+        'cluster_name': 'cluster-1',
+        'dc_name': 'dc',
+        'vmk_device': 'vmk1',
+    }
+    assert metrics['vmware_host_vmk_net_bytesTx_average'].samples[0][2] == 200.0
+
+    assert len(metrics['vmware_host_vmk_net_droppedRx_summation'].samples) == 0
+
+    assert content.perfManager.QueryStats.call_count == 2
 
 
 @pytest_twisted.inlineCallbacks

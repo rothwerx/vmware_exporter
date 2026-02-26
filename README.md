@@ -7,6 +7,7 @@ VMware vCenter Exporter for Prometheus.
 
 Get VMware vCenter information:
 - Basic VM and Host metrics
+- Per-vmkernel host network performance metrics (`vmware_host_vmk_net_*`)
 - Current number of active snapshots
 - Datastore size and other stuff
 - Snapshot Unix timestamp creation date
@@ -251,6 +252,51 @@ vmware_host_memory_usage{host_name="esx1.company.com"} 107164.0
 # HELP vmware_host_memory_max VMware Host Memory Max availability in Mbytes
 # TYPE vmware_host_memory_max gauge
 vmware_host_memory_max{host_name="esx1.company.com"} 131059.01953125
+
+# HELP vmware_host_vmk_net_bytesRx_average vmware_host_vmk_net_bytesRx_average
+# TYPE vmware_host_vmk_net_bytesRx_average gauge
+vmware_host_vmk_net_bytesRx_average{host_name="esx1.company.com",dc_name="dc-1",cluster_name="cluster-1",vmk_device="vmk0"} 100.0
+# HELP vmware_host_vmk_net_bytesTx_average vmware_host_vmk_net_bytesTx_average
+# TYPE vmware_host_vmk_net_bytesTx_average gauge
+vmware_host_vmk_net_bytesTx_average{host_name="esx1.company.com",dc_name="dc-1",cluster_name="cluster-1",vmk_device="vmk1"} 200.0
+```
+
+Per-vmkernel host network metrics currently exported:
+- `vmware_host_vmk_net_bytesRx_average`
+- `vmware_host_vmk_net_bytesTx_average`
+- `vmware_host_vmk_net_droppedRx_summation`
+- `vmware_host_vmk_net_droppedTx_summation`
+- `vmware_host_vmk_net_errorsRx_summation`
+- `vmware_host_vmk_net_errorsTx_summation`
+- `vmware_host_vmk_net_usage_average`
+
+Example PromQL queries:
+
+Total vmkernel traffic per host/vmk (Rx + Tx):
+```promql
+sum by (host_name, vmk_device) (
+  vmware_host_vmk_net_bytesRx_average + vmware_host_vmk_net_bytesTx_average
+)
+```
+
+Top 10 vmkernel adapters by network errors (Rx + Tx):
+```promql
+topk(
+  10,
+  sum by (host_name, vmk_device) (
+    vmware_host_vmk_net_errorsRx_summation + vmware_host_vmk_net_errorsTx_summation
+  )
+)
+```
+
+Top 10 vmkernel adapters by dropped packets (Rx + Tx):
+```promql
+topk(
+  10,
+  sum by (host_name, vmk_device) (
+    vmware_host_vmk_net_droppedRx_summation + vmware_host_vmk_net_droppedTx_summation
+  )
+)
 ```
 
 ## References
