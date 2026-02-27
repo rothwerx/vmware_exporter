@@ -42,32 +42,36 @@ class BranchingDeferred(defer.Deferred):
     This is a deferred that enables the parallel branching use case.
     '''
 
+    _UNSET = object()
+
     def __init__(self):
-        self.callbacks = []
-        self.result = None
+        super().__init__()
+        self._branches = []
+        self._branch_result = self._UNSET
 
     def callback(self, result):
-        self.result = result
-        while self.callbacks:
-            self.callbacks.pop(0).callback(result)
+        self._branch_result = result
+        while self._branches:
+            self._branches.pop(0).callback(result)
 
     def errback(self, err):
-        self.result = err
-        while self.callbacks:
-            self.callbacks.pop(0).errback(err)
+        if not isinstance(err, failure.Failure):
+            err = failure.Failure(err)
+        self._branch_result = err
+        while self._branches:
+            self._branches.pop(0).errback(err)
 
     def addCallbacks(self, *args, **kwargs):
-        if self.result is None:
+        if self._branch_result is self._UNSET:
             d = defer.Deferred()
             d.addCallbacks(*args, **kwargs)
-            self.callbacks.append(d)
-            return
+            self._branches.append(d)
+            return d
 
-        if isinstance(self.result, failure.Failure):
-            defer.fail(self.result).addCallbacks(*args, **kwargs)
-            return
+        if isinstance(self._branch_result, failure.Failure):
+            return defer.fail(self._branch_result).addCallbacks(*args, **kwargs)
 
-        defer.succeed(self.result).addCallbacks(*args, **kwargs)
+        return defer.succeed(self._branch_result).addCallbacks(*args, **kwargs)
 
 
 class run_once_property(object):
